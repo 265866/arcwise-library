@@ -1,0 +1,16 @@
+{
+  "name": "arcwise-library",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "bun src/cli.ts check",
+    "publish-library": "bun src/cli.ts publish",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.152.0"
+  }
+}
