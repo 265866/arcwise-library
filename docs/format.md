@@ -91,7 +91,7 @@ A missing image shows a placeholder, and a missing clip shows its first frame wi
 Fields Arcwise does not know are ignored, so a library can add its own.
 
 Arcwise refuses a library whose lineups refer to a map, agent or ability it does not list, or that
-lists a lineup id twice. When two libraries it shows list the same lineup id, it shows the lineup
+lists a map, agent, ability (of one agent) or lineup id twice. When two libraries it shows list the same lineup id, it shows the lineup
 from the library higher in its list.
 
 ## manifest.json
@@ -124,8 +124,7 @@ by hand.
 
 Any web server or object store that serves the folder's files at their paths works, as long as it
 supports HTTP range requests for the clips; Arcwise reads `<base>/library.json`, then each file at
-`<base>/<path>`. The `publish` command in this repository uploads a folder to a Cloudflare R2
-bucket and sets:
+`<base>/<path>`. These caching headers suit it:
 
 | Files | `Cache-Control` |
 | --- | --- |

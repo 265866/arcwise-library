@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { check, checkStructure, mediaFiles, streamable, type Library } from "../src/library";
 import { buildManifest, diff } from "../src/manifest";
-import { cacheControl, contentType, publish, type Store } from "../src/publish";
+import { contentType, liveManifest, publish, type Store } from "../src/publish";
 
 const MAP = "7eaecc1b-4337-bbf6-6ab9-04b8f06b3319";
 const SOVA = "320b2a48-4d9b-a075-30f1-1f93a9b638fa";
@@ -125,16 +125,19 @@ describe("manifest", () => {
 
 describe("publish", () => {
   class Fake implements Store {
+    readonly name = "bucket";
     calls: string[] = [];
     failures = new Map<string, number>();
-    async put(key: string, _file: string, type: string, cache: string) {
+    objects = new Map<string, string>();
+    async get(key: string) { return this.objects.get(key) ?? null; }
+    async put(key: string, _file: string, type: string) {
       const left = this.failures.get(key) ?? 0;
       if (left > 0) { this.failures.set(key, left - 1); throw new Error("flaky"); }
-      this.calls.push(`put ${key} ${type} ${cache}`);
+      this.calls.push(`put ${key} ${type}`);
     }
     async remove(key: string) { this.calls.push(`remove ${key}`); }
   }
-  const opts = (store: Store, extra = {}) => ({ store, concurrency: 2, prune: false, dryRun: false, log: () => {}, ...extra });
+  const opts = (store: Store, extra = {}) => ({ store, concurrency: 2, prune: false, dryRun: false, log: () => {}, retryMs: 1, ...extra });
 
   test("uploads changed media, then library.json, then the manifest last", async () => {
     const dir = await folder(lib(), { "lineups/1.mp4": "clip", "lineups/1-start.webp": "pic" });
@@ -143,13 +146,30 @@ describe("publish", () => {
     store.failures.set("lineups/1.mp4", 1);
     await publish(dir, local, { format: 1, files: { "lineups/1-start.webp": local.files["lineups/1-start.webp"], "old.webp": { size: 1, sha256: "x" } } }, opts(store));
     expect(store.calls).toEqual([
-      "put lineups/1.mp4 video/mp4 public, max-age=31536000, immutable",
-      "put library.json application/json public, max-age=60",
-      "put manifest.json application/json public, max-age=60",
+      "put lineups/1.mp4 video/mp4",
+      "put library.json application/json",
+      "put manifest.json application/json",
     ]);
     expect(await Bun.file(join(dir, "manifest.json")).json()).toEqual(local);
     await rm(dir, { recursive: true });
   }, 15000);
+
+  test("a publish that stopped resumes after the files it uploaded", async () => {
+    const dir = await folder(lib(), { "lineups/1.mp4": "one", "lineups/2.mp4": "two" });
+    const local = await buildManifest(dir);
+    const stopped = new Fake();
+    stopped.failures.set("lineups/2.mp4", Infinity);
+    await expect(publish(dir, local, null, opts(stopped, { concurrency: 1 }))).rejects.toThrow("lineups/2.mp4");
+    expect(stopped.calls).toEqual(["put lineups/1.mp4 video/mp4"]);
+    const resumed = new Fake();
+    await publish(dir, local, null, opts(resumed));
+    expect(resumed.calls).toEqual(["put lineups/2.mp4 video/mp4", "put library.json application/json", "put manifest.json application/json"]);
+    expect(await Bun.file(join(dir, ".publish-journal-bucket")).exists()).toBe(false);
+    const again = new Fake();
+    await publish(dir, local, null, opts(again));
+    expect(again.calls[0]).toBe("put lineups/1.mp4 video/mp4");
+    await rm(dir, { recursive: true });
+  });
 
   test("prunes only when asked, and a dry run touches nothing", async () => {
     const dir = await folder(lib(), { "a.webp": "a" });
@@ -164,9 +184,14 @@ describe("publish", () => {
     await rm(dir, { recursive: true });
   });
 
-  test("names types and caching by extension", () => {
+  test("names types by extension", () => {
     expect([contentType("x.svg"), contentType("x.WEBP"), contentType("x.bin")]).toEqual(["image/svg+xml", "image/webp", "application/octet-stream"]);
-    expect(cacheControl("manifest.json")).toBe("public, max-age=60");
-    expect(cacheControl("lineups/1.mp4")).toContain("immutable");
+  });
+
+  test("reads the live manifest from the store, or none before the first publish", async () => {
+    const store = new Fake();
+    expect(await liveManifest(store)).toBeNull();
+    store.objects.set("manifest.json", JSON.stringify({ format: 1, files: { a: { size: 1, sha256: "x" } } }));
+    expect(await liveManifest(store)).toEqual({ format: 1, files: { a: { size: 1, sha256: "x" } } });
   });
 });
