@@ -71,7 +71,7 @@ async function withRetries<T>(what: string, attempt: () => Promise<T>, waitMs: n
       return await attempt();
     } catch (e) {
       if (i >= tries) throw new Error(`${what}: ${(e as Error).message}`);
-      await Bun.sleep(waitMs * 2 ** i);
+      await Bun.sleep(waitMs * 2 ** (i - 1));
     }
   }
 }
@@ -79,7 +79,7 @@ async function withRetries<T>(what: string, attempt: () => Promise<T>, waitMs: n
 export type PublishOptions = {
   store: Store; concurrency: number; prune: boolean; dryRun: boolean;
   log: (line: string) => void;
-  /** The wait before the first retry, doubling after each; 1 s unless set. */
+  /** The wait before the first retry, doubling after each; 2 s unless set. */
   retryMs?: number;
 };
 
@@ -87,11 +87,18 @@ export type PublishOptions = {
 // resumes where it stopped instead of uploading everything again. The manifest's upload ends it.
 const journalOf = (dir: string, store: Store) => join(dir, `.publish-journal-${store.name}`);
 
+// With --prune, the files to delete are listed in a second file until all are deleted, since once
+// the new manifest is live a later publish no longer knows of them.
+const pruneListOf = (dir: string, store: Store) => join(dir, `.publish-prune-${store.name}`);
+
+async function lines(path: string) {
+  const file = Bun.file(path);
+  return (await file.exists()) ? (await file.text()).split("\n").filter(Boolean) : [];
+}
+
 async function uploadedBefore(journal: string, local: Manifest) {
-  const file = Bun.file(journal);
-  if (!(await file.exists())) return new Set<string>();
   const done = new Set<string>();
-  for (const line of (await file.text()).split("\n")) {
+  for (const line of await lines(journal)) {
     const at = line.indexOf(" ");
     const path = line.slice(at + 1);
     if (at > 0 && local.files[path]?.sha256 === line.slice(0, at)) done.add(path);
@@ -102,10 +109,12 @@ async function uploadedBefore(journal: string, local: Manifest) {
 /** Uploads what changed and returns what it did; with dryRun, only what it would do. */
 export async function publish(dir: string, local: Manifest, remote: Manifest | null, opts: PublishOptions) {
   const journal = journalOf(dir, opts.store);
-  const retry = <T>(what: string, attempt: () => Promise<T>) => withRetries(what, attempt, opts.retryMs ?? 1000);
+  const retry = <T>(what: string, attempt: () => Promise<T>) => withRetries(what, attempt, opts.retryMs ?? 2000);
   const changed = diff(local, remote);
   const before = await uploadedBefore(journal, local);
-  const upload = changed.upload.filter((p) => !before.has(p)), remove = changed.remove;
+  const pruneList = pruneListOf(dir, opts.store);
+  const leftOver = (await lines(pruneList)).filter((p) => !local.files[p] && !changed.remove.includes(p));
+  const upload = changed.upload.filter((p) => !before.has(p)), remove = [...changed.remove, ...leftOver];
   if (before.size) opts.log(`${before.size} files were uploaded by a publish that did not finish`);
   const bytes = upload.reduce((sum, p) => sum + local.files[p].size, 0);
   opts.log(`${upload.length} files to upload (${(bytes / 1e9).toFixed(2)} GB), ${remove.length} no longer in the library${opts.prune ? "" : " (kept; --prune deletes them)"}`);
@@ -123,7 +132,11 @@ export async function publish(dir: string, local: Manifest, remote: Manifest | n
   await retry("library.json", () => opts.store.put("library.json", join(dir, "library.json"), contentType("library.json")));
   await Bun.write(join(dir, "manifest.json"), JSON.stringify(local));
   await retry("manifest.json", () => opts.store.put("manifest.json", join(dir, "manifest.json"), contentType("manifest.json")));
+  if (opts.prune && remove.length) await Bun.write(pruneList, remove.map((p) => `${p}\n`).join(""));
   await rm(journal, { force: true });
-  if (opts.prune) for (const path of remove) await retry(path, () => opts.store.remove(path));
+  if (opts.prune) {
+    for (const path of remove) await retry(path, () => opts.store.remove(path));
+    await rm(pruneList, { force: true });
+  }
   return { upload, remove: opts.prune ? remove : [] };
 }

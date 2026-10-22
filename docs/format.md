@@ -91,8 +91,8 @@ A missing image shows a placeholder, and a missing clip shows its first frame wi
 Fields Arcwise does not know are ignored, so a library can add its own.
 
 Arcwise refuses a library whose lineups refer to a map, agent or ability it does not list, or that
-lists a map, agent, ability (of one agent) or lineup id twice. When two libraries it shows list the same lineup id, it shows the lineup
-from the library higher in its list.
+lists a map, agent or lineup id twice, or an ability id twice, even under different agents. When two
+libraries it shows list the same lineup id, it shows the lineup from the library higher in its list.
 
 ## manifest.json
 

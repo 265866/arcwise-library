@@ -171,6 +171,23 @@ describe("publish", () => {
     await rm(dir, { recursive: true });
   });
 
+  test("a prune that stopped deletes the rest next time", async () => {
+    const dir = await folder(lib(), { "a.webp": "a" });
+    const local = await buildManifest(dir);
+    const remote = { format: 1 as const, files: { "gone1.webp": { size: 1, sha256: "x" }, "gone2.webp": { size: 1, sha256: "y" } } };
+    const stopped = new Fake();
+    stopped.remove = async (key: string) => {
+      if (key === "gone2.webp") throw new Error("flaky");
+      stopped.calls.push(`remove ${key}`);
+    };
+    await expect(publish(dir, local, remote, opts(stopped, { prune: true }))).rejects.toThrow("gone2.webp");
+    const next = new Fake();
+    await publish(dir, local, local, opts(next, { prune: true }));
+    expect(next.calls).toEqual(["put library.json application/json", "put manifest.json application/json", "remove gone1.webp", "remove gone2.webp"]);
+    expect(await Bun.file(join(dir, ".publish-prune-bucket")).exists()).toBe(false);
+    await rm(dir, { recursive: true });
+  });
+
   test("prunes only when asked, and a dry run touches nothing", async () => {
     const dir = await folder(lib(), { "a.webp": "a" });
     const local = await buildManifest(dir);
