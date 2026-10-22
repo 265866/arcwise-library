@@ -130,9 +130,9 @@ export async function publish(dir: string, local: Manifest, remote: Manifest | n
     }
   }));
   await retry("library.json", () => opts.store.put("library.json", join(dir, "library.json"), contentType("library.json")));
+  if (opts.prune && remove.length) await Bun.write(pruneList, remove.map((p) => `${p}\n`).join(""));
   await Bun.write(join(dir, "manifest.json"), JSON.stringify(local));
   await retry("manifest.json", () => opts.store.put("manifest.json", join(dir, "manifest.json"), contentType("manifest.json")));
-  if (opts.prune && remove.length) await Bun.write(pruneList, remove.map((p) => `${p}\n`).join(""));
   await rm(journal, { force: true });
   if (opts.prune) {
     for (const path of remove) await retry(path, () => opts.store.remove(path));
